@@ -211,7 +211,7 @@ if uploaded_csv:
     # ----------------------------
     st.subheader("📅 Filter / View Options")
 
-    available_dates = sorted(result.index.date.unique())
+    available_dates = sorted(pd.unique(result.index.date))
     view_mode = st.radio("เลือกโหมดการแสดงผล", ["ทั้งหมด", "รายวัน"], horizontal=True)
 
     if view_mode == "รายวัน":
@@ -297,3 +297,4 @@ if uploaded_csv:
 
 else:
     st.info("อัปโหลดไฟล์ CSV เพื่อเริ่มทำนาย")
+
