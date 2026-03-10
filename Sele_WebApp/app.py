@@ -132,6 +132,12 @@ def plot_actual_vs_pred_interactive(result_df: pd.DataFrame, daily_mode=False, s
         plot_bgcolor="white",
         paper_bgcolor="white",
 
+        font=dict(
+            family="Arial",
+            size=14,
+            color="black"
+        ),
+
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -312,6 +318,7 @@ if uploaded_csv:
 
 else:
     st.info("อัปโหลดไฟล์ CSV เพื่อเริ่มทำนาย")
+
 
 
 
