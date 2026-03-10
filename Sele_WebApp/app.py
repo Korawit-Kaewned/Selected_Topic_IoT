@@ -29,10 +29,11 @@ if not os.path.exists(MODEL_PATH):
     st.error(f"❌ ไม่พบไฟล์โมเดลที่: {MODEL_PATH}\n\nตรวจสอบว่าได้วาง model.joblib ไว้ถูกโฟลเดอร์แล้ว")
     st.stop()
 
-# โหลดโมเดลครั้งเดียว แล้ว cache ไว้ (Streamlit rerun บ่อย)
+
 @st.cache_resource
 def load_model(path: str):
     return joblib.load(path)
+
 
 model = load_model(MODEL_PATH)
 st.success("✅ โหลดโมเดลสำเร็จ (model.joblib)")
@@ -91,45 +92,51 @@ def make_lags(hourly_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def plot_actual_vs_pred(result_df: pd.DataFrame):
+def plot_actual_vs_pred(result_df: pd.DataFrame, daily_mode: bool = False, selected_date=None):
+    fig, ax = plt.subplots(figsize=(12, 5))
 
-    fig, ax = plt.subplots(figsize=(12,5))
-
-    ax.plot(result_df.index, result_df["actual_temp"], label="Actual", linewidth=2)
-    ax.plot(result_df.index, result_df["predicted_temp"], label="Predicted", linewidth=2)
+    ax.plot(result_df.index, result_df["actual_temp"], label="Actual", linewidth=2, marker="o")
+    ax.plot(result_df.index, result_df["predicted_temp"], label="Predicted", linewidth=2, marker="o")
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Temperature (°C)")
-    ax.set_title("Actual vs Predicted Temperature (Hourly)")
+
+    if daily_mode and selected_date is not None:
+        ax.set_title(f"Actual vs Predicted Temperature - {selected_date}")
+    else:
+        ax.set_title("Actual vs Predicted Temperature (Hourly)")
+
     ax.legend()
     ax.grid(True, alpha=0.3)
 
     # ----------------------------
-    # AUTO X AXIS SCALE
+    # X AXIS
     # ----------------------------
-    time_span = result_df.index.max() - result_df.index.min()
-
-    if time_span <= pd.Timedelta(days=2):
-        locator = mdates.HourLocator(interval=2)
-        formatter = mdates.DateFormatter("%d/%m\n%H:%M")
-
-    elif time_span <= pd.Timedelta(days=7):
-        locator = mdates.HourLocator(interval=6)
-        formatter = mdates.DateFormatter("%d/%m\n%H:%M")
-
-    elif time_span <= pd.Timedelta(days=30):
-        locator = mdates.DayLocator(interval=2)
-        formatter = mdates.DateFormatter("%d/%m")
-
+    if daily_mode:
+        # สำหรับดูวันเดียว
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     else:
-        locator = mdates.AutoDateLocator(minticks=5, maxticks=10)
-        formatter = mdates.DateFormatter("%d/%m/%y")
+        time_span = result_df.index.max() - result_df.index.min()
 
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(formatter)
+        if time_span <= pd.Timedelta(days=2):
+            locator = mdates.HourLocator(interval=2)
+            formatter = mdates.DateFormatter("%d/%m\n%H:%M")
+        elif time_span <= pd.Timedelta(days=7):
+            locator = mdates.HourLocator(interval=6)
+            formatter = mdates.DateFormatter("%d/%m\n%H:%M")
+        elif time_span <= pd.Timedelta(days=30):
+            locator = mdates.DayLocator(interval=2)
+            formatter = mdates.DateFormatter("%d/%m")
+        else:
+            locator = mdates.AutoDateLocator(minticks=5, maxticks=10)
+            formatter = mdates.DateFormatter("%d/%m/%y")
+
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
 
     # ----------------------------
-    # AUTO Y AXIS SCALE
+    # Y AXIS
     # ----------------------------
     y_all = pd.concat([
         result_df["actual_temp"],
@@ -137,28 +144,17 @@ def plot_actual_vs_pred(result_df: pd.DataFrame):
     ]).dropna()
 
     if len(y_all) > 0:
-
         y_min = y_all.min()
         y_max = y_all.max()
-
         y_range = y_max - y_min
 
-        # ถ้าช่วงแคบมาก
-        if y_range < 0.5:
-            pad = 0.5
-        else:
-            pad = y_range * 0.1   # padding 10%
-
+        pad = 0.5 if y_range < 0.5 else y_range * 0.1
         ax.set_ylim(y_min - pad, y_max + pad)
 
-    # ----------------------------
-    # Rotate label
-    # ----------------------------
     plt.xticks(rotation=45, ha="right")
-
     fig.tight_layout()
-
     return fig
+
 
 # ----------------------------
 # UI: Upload
@@ -168,49 +164,39 @@ uploaded_csv = st.file_uploader("📤 อัปโหลดไฟล์ CSV", ty
 MAX_GAP_HOURS = 6
 SHOW_ROWS = 10
 
-colA, colB = st.columns(2)
-
 if uploaded_csv:
-    # Progress UI
     progress = st.progress(0)
     status_box = st.empty()
 
-    with st.spinner("กำลังประมวลผล... (อย่าปิดหน้านี้)"):
+    with st.spinner("กำลังประมวลผล..."):
         try:
             status_box.info("Step 1/5: โหลดไฟล์ CSV ...")
             progress.progress(10)
             df_raw = pd.read_csv(uploaded_csv)
 
-            # Validate columns
             if "convert time" not in df_raw.columns or "temp" not in df_raw.columns:
                 st.error("ไฟล์ CSV ต้องมีคอลัมน์ 'convert time' และ 'temp'")
                 st.stop()
 
-            status_box.info("Step 2/5: Data Preparation (parse time, sort, resample 1H, interpolate ช่องว่างสั้น)...")
+            status_box.info("Step 2/5: Data Preparation ...")
             progress.progress(35)
             hourly = prepare_hourly(df_raw, max_gap_hours=MAX_GAP_HOURS)
 
-            status_box.info("Step 3/5: Feature Engineering (สร้าง temp_lag1/2/3)...")
+            status_box.info("Step 3/5: Feature Engineering ...")
             progress.progress(55)
             feat = make_lags(hourly)
 
-            status_box.info("Step 4/5: Predict (ใช้โมเดลจริงจากไฟล์ model.joblib)...")
+            status_box.info("Step 4/5: Predict ...")
             progress.progress(75)
             X = feat[["temp_lag1", "temp_lag2", "temp_lag3"]]
             y_pred = model.predict(X)
 
-            status_box.info("Step 5/5: สร้างผลลัพธ์ + คำนวณ MAE/RMSE + แสดงผล...")
+            status_box.info("Step 5/5: สร้างผลลัพธ์ ...")
             progress.progress(90)
 
             result = feat.copy()
             result["predicted_temp"] = y_pred
             result = result.rename(columns={"temp_final": "actual_temp"})
-
-            # Metrics (MAE / RMSE)
-            y_true = result["actual_temp"].values
-            y_hat = result["predicted_temp"].values
-            mae = float(mean_absolute_error(y_true, y_hat))
-            rmse = float(np.sqrt(mean_squared_error(y_true, y_hat)))
 
             progress.progress(100)
             status_box.success("เสร็จสิ้น! แสดงผลด้านล่าง ✅")
@@ -221,35 +207,66 @@ if uploaded_csv:
             st.stop()
 
     # ----------------------------
+    # Filter section
+    # ----------------------------
+    st.subheader("📅 Filter / View Options")
+
+    available_dates = sorted(result.index.date.unique())
+    view_mode = st.radio("เลือกโหมดการแสดงผล", ["ทั้งหมด", "รายวัน"], horizontal=True)
+
+    if view_mode == "รายวัน":
+        selected_date = st.selectbox("เลือกวันที่ที่ต้องการดู", available_dates)
+        filtered_result = result[result.index.date == selected_date].copy()
+        filtered_hourly = hourly[hourly.index.date == selected_date].copy()
+        daily_mode = True
+    else:
+        selected_date = None
+        filtered_result = result.copy()
+        filtered_hourly = hourly.copy()
+        daily_mode = False
+
+    if filtered_result.empty:
+        st.warning("ไม่มีข้อมูลสำหรับวันที่เลือก")
+        st.stop()
+
+    # Metrics ตามช่วงที่เลือก
+    y_true = filtered_result["actual_temp"].values
+    y_hat = filtered_result["predicted_temp"].values
+    mae = float(mean_absolute_error(y_true, y_hat))
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_hat)))
+
+    # ----------------------------
     # Metrics section
     # ----------------------------
-    st.subheader("📌 Model Metrics (on uploaded data)")
+    st.subheader("📌 Model Metrics")
     m1, m2, m3 = st.columns(3)
     m1.metric("MAE (°C)", f"{mae:.3f}")
     m2.metric("RMSE (°C)", f"{rmse:.3f}")
-    m3.metric("Predicted points", f"{len(result)}")
+    m3.metric("Predicted points", f"{len(filtered_result)}")
 
     st.divider()
 
     # ----------------------------
     # Show summaries
     # ----------------------------
+    colA, colB = st.columns(2)
+
     with colA:
         st.subheader("✅ Data Preparation Summary")
-        st.write("ช่วงเวลา:", hourly.index.min(), "→", hourly.index.max())
-        st.write("จำนวนชั่วโมงทั้งหมด:", len(hourly))
+        st.write("ช่วงเวลา:", filtered_hourly.index.min(), "→", filtered_hourly.index.max())
+        st.write("จำนวนชั่วโมงทั้งหมด:", len(filtered_hourly))
         st.write(
             "จำนวนชั่วโมงที่ยังว่าง (NaN) หลัง interpolate แบบไม่แต่ง long gap:",
-            int(hourly["temp_final"].isna().sum()),
+            int(filtered_hourly["temp_final"].isna().sum()),
         )
         st.write("ตัวอย่างข้อมูลรายชั่วโมง:")
-        st.dataframe(hourly.head(SHOW_ROWS))
+        st.dataframe(filtered_hourly.head(SHOW_ROWS))
 
     with colB:
         st.subheader("🔮 Prediction Output")
         st.write("ตัวอย่างผลลัพธ์:")
         st.dataframe(
-            result[["actual_temp", "temp_lag1", "temp_lag2", "temp_lag3", "predicted_temp"]].head(SHOW_ROWS)
+            filtered_result[["actual_temp", "temp_lag1", "temp_lag2", "temp_lag3", "predicted_temp"]].head(SHOW_ROWS)
         )
 
     st.divider()
@@ -257,25 +274,26 @@ if uploaded_csv:
     # ----------------------------
     # Plot
     # ----------------------------
-    st.subheader("📈 Actual vs Predicted (Hourly)")
-    fig = plot_actual_vs_pred(result)
+    st.subheader("📈 Actual vs Predicted")
+    fig = plot_actual_vs_pred(
+        filtered_result,
+        daily_mode=daily_mode,
+        selected_date=selected_date
+    )
     st.pyplot(fig)
 
     # ----------------------------
     # Download
     # ----------------------------
     st.subheader("⬇️ Download Predictions")
-    out_csv = result.reset_index()
+    out_csv = filtered_result.reset_index()
     csv_bytes = out_csv.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "ดาวน์โหลด predictions.csv",
+        "ดาวน์โหลด predictions_filtered.csv",
         data=csv_bytes,
-        file_name="predictions.csv",
+        file_name="predictions_filtered.csv",
         mime="text/csv",
     )
 
 else:
-
     st.info("อัปโหลดไฟล์ CSV เพื่อเริ่มทำนาย")
-
-
